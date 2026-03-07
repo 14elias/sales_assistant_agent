@@ -2,7 +2,7 @@ from langchain_groq import ChatGroq
 import os
 from dotenv import load_dotenv
 
-from ..schemas.action_schema import ActionSchema
+from schemas.action_schema import ActionSchema
 
 load_dotenv()
 

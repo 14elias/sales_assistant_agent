@@ -9,7 +9,6 @@ from nodes import (
     calendar_node,
     response_node,
     validation_node,
-    speech_to_text_node
 )
 
 
@@ -58,8 +57,6 @@ class SchedulingGraph:
         
         builder = StateGraph(AgentState)
 
-        builder.add_node("speech_to_text", speech_to_text_node)
-
         builder.add_node("intent_parser", intent_parser_node)
 
         builder.add_node("validation", validation_node)
@@ -102,7 +99,8 @@ class SchedulingGraph:
 
         return graph
     
-
+scheduling_graph =SchedulingGraph()
+graph = scheduling_graph.build()
 
 if __name__ == "__main__":
     state = AgentState()

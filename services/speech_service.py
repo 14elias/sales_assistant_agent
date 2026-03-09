@@ -4,14 +4,14 @@ import logging
 from typing import Optional
 from dotenv import load_dotenv
 
-# v6 core imports
 from deepgram import AsyncDeepgramClient
 from deepgram.core.events import EventType
+from deepgram.listen.v1.types import ListenV1Results, ListenV1Metadata
 
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-logger = logging.getLogger(__name__)
 
 class SpeechService:
     """
@@ -23,44 +23,39 @@ class SpeechService:
         if not api_key:
             raise RuntimeError("DEEPGRAM_API_KEY environment variable not set")
 
-        # In v6, simple dictionary configuration replaces DeepgramClientOptions
-        self.client = AsyncDeepgramClient(
-            api_key=api_key
-        )
+        self.client = AsyncDeepgramClient(api_key=api_key)
 
         self.connection = None
+        self._connection_ctx = None
+
         self._final_transcript: Optional[str] = None
         self._partial_transcript: Optional[str] = None
         self._speech_final = False
+
         self._lock = asyncio.Lock()
 
     async def connect(self):
-        """Initialize Deepgram streaming connection using dictionary-based config."""
-        
-        # Define connection options as a simple dictionary
-        # This replaces the need for the LiveOptions class
+        """Initialize Deepgram streaming connection."""
+
         options = {
-            "model": "nova-2",
+            "model": "nova-3",
             "language": "en-US",
-            "smart_format": True,
-            "interim_results": True,
-            "vad_events": True,
-            "endpointing": 300,
         }
 
-        # v6 connection pattern
+        # Open websocket connection
         self._connection_ctx = self.client.listen.v1.connect(**options)
         self.connection = await self._connection_ctx.__aenter__()
 
-
-        # Register event handlers using EventType
-        self.connection.on(EventType.TRANSCRIPT, self._on_message)
+        # Register event handlers
+        self.connection.on(EventType.OPEN, lambda _: logger.info("Deepgram connection opened"))
+        self.connection.on(EventType.MESSAGE, self._on_message)
         self.connection.on(EventType.ERROR, lambda e: logger.error(f"Deepgram Error: {e}"))
+        self.connection.on(EventType.CLOSE, lambda _: logger.info("Deepgram connection closed"))
+
+        # Start listener task
         await self.connection.start_listening()
-        
-        # Start the background task to listen for server messages
-        await self.connection.start_listening()
-        logger.info("Deepgram v6 streaming connection started")
+
+        logger.info("Deepgram streaming connection started")
 
     async def send_audio(self, audio_chunk: bytes):
         """Send audio chunk to Deepgram."""
@@ -68,36 +63,45 @@ class SpeechService:
             raise RuntimeError("SpeechService not connected")
 
         try:
-            # v6 uses send_media for binary streaming
             await self.connection.send_media(audio_chunk)
-        except Exception as e:
+        except Exception:
             logger.exception("Error sending audio chunk to Deepgram")
-            raise e
+            raise
 
-    async def _on_message(self, result, **kwargs):
-        """Handle incoming transcript events."""
-        async with self._lock:
-            try:
-                # Accessing the transcript directly from the result object
-                channel = result.channel
+    async def _on_message(self, message, **kwargs):
+        """Handle Deepgram websocket messages."""
+
+        try:
+            # Metadata messages
+            if isinstance(message, ListenV1Metadata):
+                logger.debug("Received metadata event")
+                return
+
+            # Transcript messages
+            if isinstance(message, ListenV1Results):
+
+                channel = message.channel
                 if not channel or not channel.alternatives:
                     return
-                
+
                 transcript = channel.alternatives[0].transcript
                 if not transcript:
                     return
 
-                if result.is_final:
-                    self._final_transcript = transcript
-                    self._speech_final = True
-                    logger.debug("Final transcript: %s", transcript)
-                else:
-                    self._partial_transcript = transcript
-            except Exception:
-                logger.exception("Error processing Deepgram transcript")
+                async with self._lock:
+                    if message.is_final:
+                        self._final_transcript = transcript
+                        self._speech_final = True
+                        logger.debug("Final transcript: %s", transcript)
+                    else:
+                        self._partial_transcript = transcript
+
+        except Exception:
+            logger.exception("Error processing Deepgram message")
 
     async def get_final_transcript(self) -> Optional[str]:
-        """Return final transcript if speech completed."""
+        """Return final transcript when speech is completed."""
+
         async with self._lock:
             if not self._speech_final:
                 return None
@@ -105,12 +109,32 @@ class SpeechService:
             text = self._final_transcript
             self._final_transcript = None
             self._speech_final = False
+
             return text
 
-    async def close(self):
-        """Close Deepgram connection."""
+    async def send_keep_alive(self):
+        """Send keep-alive signal to prevent timeout."""
+
         if self.connection:
-            await self.connection.finish()
+            await self.connection.send_keep_alive()
+
+    async def finalize(self):
+        """Tell Deepgram the audio stream has finished."""
+
+        if self.connection:
+            await self.connection.send_finalize()
+
+    async def close(self):
+        """Close Deepgram connection cleanly."""
+
+        if self.connection:
+            try:
+                await self.connection.send_close_stream()
+                await self.connection.close()
+            finally:
+                if self._connection_ctx:
+                    await self._connection_ctx.__aexit__(None, None, None)
+
             logger.info("Deepgram connection closed")
 
 

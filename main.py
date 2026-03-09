@@ -34,11 +34,13 @@ async def voice_agent(ws: WebSocket):
 
             # send audio to Deepgram
             await speech_service.send_audio(audio_chunk)
+            await speech_service.finalize()
 
             # check if speech finished
             text = await speech_service.get_final_transcript()
 
             if not text:
+                await speech_service.send_keep_alive()
                 continue
 
             logger.info("User transcript: %s", text)
@@ -62,12 +64,13 @@ async def voice_agent(ws: WebSocket):
             audio_path = tts_service.speak(response_text)
 
             # send response to client
-            await ws.send_json({
-                "thread_id": thread_id,
-                "text": response_text,
-                "audio": audio_path,
-                "status": result_state.get("status")
-            })
+            if ws.client_state.name == "CONNECTED":
+                await ws.send_json({
+                    "thread_id": thread_id,
+                    "text": response_text,
+                    "audio": audio_path,
+                    "status": result_state.get("status")
+                })
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
@@ -80,4 +83,5 @@ async def voice_agent(ws: WebSocket):
         })
 
     finally:
+        await speech_service.finalize()
         await speech_service.close()

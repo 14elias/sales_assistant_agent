@@ -140,6 +140,6 @@ if __name__ == "__main__":
     
     logger.info('the graph started')
     result = graph.invoke(
-        {"user_input_text": "schedule an appointment at 4pm for tommorow and send email"},
+        {"user_input_text": "hello how are you"},
         config={"configurable": {"thread_id": "123"}}
     )

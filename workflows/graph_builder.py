@@ -2,7 +2,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, SystemMessage
 from .agent_state import AgentState
-from nodes import (
+from .nodes import (
     email_node,
     clarification_node,
     intent_parser_node,
@@ -11,8 +11,12 @@ from nodes import (
     validation_node,
 )
 
+from utils.logger_config import CustomLogger
+
+from utils import GLOBAL_LOGGER
 
 
+logger = GLOBAL_LOGGER.bind(module='graph_builder')
 
 class SchedulingGraph:
     """
@@ -43,18 +47,32 @@ class SchedulingGraph:
     This class builds and compiles the LangGraph workflow.
     """
     
-    def __init__(self, state: AgentState, model):
+    def __init__(self, state: AgentState):
         self.state = state
         self.memory = MemorySaver()
     
     def build(self):
+
+
+        def intent_router(state: AgentState):
+            action = state.get("action")
+
+            print(f'STATE ACTION : {state.get("action")}')
+
+            if action == "GREETINGS":
+                return "response"
+
+            return "validation"
+
+
         def validation_router(state):
 
-            if state.get("error"):
+            if state.get("missing_fields"):
                 return "clarification"
 
             return "calendar"
         
+
         builder = StateGraph(AgentState)
 
         builder.add_node("intent_parser", intent_parser_node)
@@ -73,7 +91,15 @@ class SchedulingGraph:
 
         builder.set_entry_point("intent_parser")
 
-        builder.add_edge("intent_parser", "validation")
+        builder.add_conditional_edges(
+            "intent_parser",
+            intent_router,
+            {
+                "response": "response",
+                "validation": "validation"
+            }
+        )
+
 
         builder.add_conditional_edges(
             "validation",
@@ -97,19 +123,23 @@ class SchedulingGraph:
             interrupt_before=["clarification"]
         )
 
+
         return graph
-    
-scheduling_graph =SchedulingGraph()
+
+state = AgentState()
+scheduling_graph =SchedulingGraph(state)
 graph = scheduling_graph.build()
 
 if __name__ == "__main__":
+    
     state = AgentState()
     workflow = SchedulingGraph(state)
 
+
     graph = workflow.build()
     
+    logger.info('the graph started')
     result = graph.invoke(
-        {
-            "user_input_text": "schedule meeting tomorrow at 3pm"
-        }
+        {"user_input_text": "schedule an appointment at 4pm for tommorow and send email"},
+        config={"configurable": {"thread_id": "123"}}
     )

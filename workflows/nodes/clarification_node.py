@@ -1,6 +1,8 @@
 from workflows.agent_state import AgentState
 from ..prompts import CLARIFICATIONSYSTEMPRMPT
 from services.llm_service import llm
+from utils.logger_config import CustomLogger
+from utils import GLOBAL_LOGGER
 
 
 def clarification_node(state: AgentState) -> AgentState:
@@ -30,10 +32,15 @@ def clarification_node(state: AgentState) -> AgentState:
         It only resolves incomplete input before execution proceeds.
     """
 
-    missing_fields = state.get('error')
+    logger = GLOBAL_LOGGER.bind("clarification_node")
+
+    missing_fields = state.get('missing_fields')
     if not missing_fields:
+        logger.error('error there is no missing field')
         raise ValueError('there is no missing fields')
     
+    logger.info('missing fields:', missing_fields=missing_fields)
+
     messages = [
         {
             "role": "system",
@@ -46,7 +53,9 @@ def clarification_node(state: AgentState) -> AgentState:
     ]
     result = llm.invoke(messages)
 
-    return result.content
+    logger.info('the question from the llm to the user about the missing fields',extra={"respone": result.content})
+
+    return {"agent_response" : result.content}
 
 
 if __name__ == '__main__':
